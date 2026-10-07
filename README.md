@@ -37,6 +37,11 @@ make qemu
 
 QEMU runs without a graphical window. Use `Ctrl+A`, then `X` to exit.
 
+The Makefile uses `-kernel` so that current QEMU/OpenSBI releases pass the
+kernel entry address to OpenSBI. The older `-device loader,...` form shown in
+some versions of the course notes may leave OpenSBI's next address as zero on
+newer QEMU releases.
+
 ## Debug
 
 Use two terminals:

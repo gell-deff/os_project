@@ -79,24 +79,58 @@ continue
 info registers
 ```
 
-### 5.2 待实测记录
+### 5.2 实测记录
 
-- QEMU 复位后初始 PC：指导书给出的地址是 `0x1000`。
-- OpenSBI 的起始地址：指导书给出的地址是 `0x80000000`。
-- 内核入口地址：应为 `0x80200000`，需要用 GDB 和符号表实测确认。
-- `kern_entry` 处的寄存器状态：待运行 `info registers` 后记录。
-- `la sp, bootstacktop` 执行前后的 `sp`：待单步执行后记录。
+本次实验环境为 QEMU 10.2.1、OpenSBI 1.8 和 RISC-V GDB。启动 QEMU 后，
+使用 `target remote localhost:1234` 连接调试目标，观察到：
+
+```text
+0x0000000000001000 in ?? ()
+pc             0x1000
+sp             0x0
+```
+
+这说明 QEMU 连接建立时 CPU 停在复位地址 `0x1000`。随后执行：
+
+```gdb
+break *kern_entry
+continue
+```
+
+GDB 在内核入口处命中断点：
+
+```text
+Breakpoint 1, kern_entry () at kern/init/entry.S:7
+pc             0x80200000
+sp             0x80045e30
+```
+
+此时 `pc` 已经从 OpenSBI 的启动阶段转移到内核入口
+`0x80200000`。单步执行第一条 `la sp, bootstacktop` 后：
+
+```text
+pc             0x80200004
+sp             0x80203000
+```
+
+因此可以确认，`la sp, bootstacktop` 将栈指针设置到了内核启动栈的高地址
+端 `0x80203000`。该地址与 `entry.S` 中预留的 `KSTACKSIZE = 2 * 4096`
+以及链接布局相符。
 
 ## 6. 构建与运行验证
 
-当前 Windows 主机尚未检测到 GNU Make、RISC-V 交叉编译器、RISC-V GDB
-和 `qemu-system-riscv64`；WSL 查询目前返回权限错误。因此以下结果需要在
-工具链可用的 Linux/WSL 环境中补充：
+指导书使用的旧版 QEMU 命令在本次环境中需要调整。QEMU 10.2.1 配合
+OpenSBI 1.8 时，使用 `-device loader,file=...,addr=0x80200000` 虽然会把
+镜像写入内存，但 OpenSBI 的 `Next Address` 为 `0x0`，不会跳转到内核。
+Makefile 已改为使用 `-kernel bin/ucore.img`，这样 OpenSBI 的
+`Next Address` 为 `0x80200000`，内核可以正常启动。
+
+实际验证结果：
 
 ```text
-make:
-make qemu:
-make debug / make gdb:
+make: 通过
+make qemu: 通过，输出 "(THU.CST) os is loading ..."
+make debug / make gdb: 通过，成功命中 kern_entry
 ```
 
 ## 7. 实验中的关键知识点
