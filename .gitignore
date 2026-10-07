@@ -1,0 +1,21 @@
+# Build products
+obj/
+bin/
+
+# Generated dependency and debug files
+*.d
+*.out
+*.sym
+*.asm
+.gdb.in
+.qemu.out
+
+# Editor and indexing files
+tags
+cscope.*
+.vscode/
+.idea/
+
+# Local OS metadata
+.DS_Store
+Thumbs.db
