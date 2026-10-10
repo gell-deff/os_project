@@ -151,11 +151,66 @@ int another_function(int arg);
 
 ---
 
-### 练习：[练习标题]
+### 练习一：理解内核启动中的程序入口操作
 
-**负责人：** [学号-姓名]
+**负责人：** 王泊凯
 
-[按照练习的具体要求进行解答]
+#### 1. `la sp, bootstacktop` 完成了什么操作？
+
+`la` 是 load address 的伪指令，它将符号 `bootstacktop` 的绝对物理地址加载到堆栈指针寄存器 `sp` 中。
+
+它不是一条真实指令：汇编器把它展开成 PC 相对的两条指令。用 `riscv64-unknown-elf-objdump -d bin/kernel` 查看本次构建的反汇编，结果如下：
+
+```asm
+80200000:  00003117    auipc  sp,0x3
+80200004:  00010113    mv     sp,sp
+```
+
+`auipc sp,0x3` 把当前 PC（`0x80200000`）加上 `0x3 << 12 = 0x3000`，得到 `0x80203000`；第二条本质是 `addi sp,sp,0`，用于补足地址的低 12 位。因为 `bootstacktop = 0x80203000` 的低 12 位恰好为 0，反汇编才显示成 `mv sp,sp`。两条执行完后 `sp = 0x80203000`，与符号表中的值一致：
+
+```text
+0000000080203000 D bootstacktop
+```
+
+#### 2. `la sp, bootstacktop` 的目的是什么？
+
+在这条指令之前，`sp` 指向的仍是 OpenSBI 固件自己的栈（练习二实测交棒瞬间 `sp = 0x8001bd80`），内核不能继续借用固件的栈，必须建立自己的 C 语言执行环境：`kern_init` 及其调用的函数需要一块可用的栈来保存返回地址 `ra`、局部变量和被调用者保存寄存器，否则函数调用会访问无效地址。
+
+需要说明的是，交棒瞬间的 `sp` 只代表固件当时使用的栈位置，与机器和 OpenSBI 版本有关（例如另一台机器上实测为 `0x8003def0`），而 `la sp, bootstacktop` 执行后的 `0x80203000` 只由源码和链接脚本决定，在任何机器上都相同。
+
+RISC-V 的栈向低地址方向增长，因此栈指针的初值要取预分配栈区间的最高地址。`bootstack` 到 `bootstacktop` 正好是保留的两个页面：
+
+```text
+bootstacktop - bootstack = 0x80203000 - 0x80201000 = 0x2000 = 8192 字节
+KSTACKSIZE = KSTACKPAGE(2) × PGSIZE(4096) = 8192 字节
+```
+
+其中 `KSTACKPAGE = 2`、`KSTACKSIZE = KSTACKPAGE * PGSIZE` 定义在 `kern/mm/memlayout.h`，`PGSIZE = 4096` 定义在 `kern/mm/mmu.h`；符号表里 `bootstacktop - bootstack = 0x2000` 正好等于这两个宏算出的 8192 字节，源码与实测互为印证。
+
+这也解释了为什么初值取 `bootstacktop` 而不是 `bootstack`：只有从最高端开始，向下增长的栈才完整落在预留区间内。
+
+#### 3. `tail kern_init` 完成了什么操作？
+
+`tail kern_init` 是尾调用伪指令，含义是"跳转到目标函数并且不会再返回"。在 `objdump` 的反汇编里，它被汇编成一条 2 字节的压缩跳转指令：
+
+```asm
+80200008:  a009    j  8020000a <kern_init>
+```
+
+它把程序控制流无条件转移到 `kern_init`，既不修改返回地址寄存器 `ra`，也不建立新的调用栈帧。由于这条跳转只占 2 字节，`kern_init` 的入口落在 `0x8020000a`，而不是四字节对齐的地址。
+
+#### 4. `tail kern_init` 的目的是什么？
+
+`kern_init` 被声明为 `noreturn`，并且最后进入 `while (1)` 无限循环，永远不会返回 `kern_entry`。因此 `kern_entry` 无需保存返回地址、也无需建立调用栈帧；使用尾调用可以省去一个永远不会被使用的返回地址，让内核入口直接把控制权交给真正的 C 语言初始化函数。
+
+#### 补充：`tools/kernel.ld` 如何决定内核的内存布局
+
+- `OUTPUT_ARCH(riscv)` 指定输出文件的体系结构为 RISC-V；
+- `ENTRY(kern_entry)` 指定 ELF 的入口符号，链接器据此填写 ELF 头的 `Entry point address`，用 `readelf -h bin/kernel` 可验证为 `0x80200000`；
+- `BASE_ADDRESS = 0x80200000` 配合 `. = BASE_ADDRESS` 把定位计数器置到内核基地址，使 `.text` 段从 `0x80200000` 开始——这正是 OpenSBI 交棒时跳转的地址；
+- 各段依次为 `.text`（代码）、`.rodata`（只读数据）、对齐到页边界后的 `.data`（已初始化数据，`bootstack` 就放在这里）、`.sdata`（gp 相对寻址的小数据）、`.bss`（未初始化数据）；
+- `PROVIDE(etext = .)`、`PROVIDE(edata = .)`、`PROVIDE(end = .)` 把段边界导出为符号供 C 代码使用，`kern_init` 中的 `memset(edata, 0, end - edata)` 就依赖它们；
+- `/DISCARD/` 丢弃 `.eh_frame` 和 `.note.GNU-stack`，这两个段在内核环境里没有用途。
 
 ---
 
@@ -185,7 +240,46 @@ make
 
 ![编译结果](images/gdb08.png)
 
-### 2. QEMU 验证
+### 2. 符号地址验证
+
+执行：
+
+```bash
+riscv64-unknown-elf-nm -n bin/kernel | grep -E 'kern_entry|kern_init|bootstack$|bootstacktop|edata$|end$'
+riscv64-unknown-elf-readelf -h bin/kernel | grep -E 'Entry|Type|Machine'
+riscv64-unknown-elf-objdump -d bin/kernel | sed -n '1,26p'
+```
+
+关键结果：
+
+```text
+0000000080200000 T kern_entry
+000000008020000a T kern_init
+0000000080201000 D bootstack
+0000000080203000 D bootstacktop
+0000000080203008 D edata
+0000000080203008 D end
+
+Entry point address: 0x80200000
+
+80200000:  00003117    auipc  sp,0x3
+80200004:  00010113    mv     sp,sp
+80200008:  a009        j      8020000a <kern_init>
+```
+
+六个符号与链接脚本、`mmu.h`、`memlayout.h` 中的定义互相印证：`kern_entry` 位于链接脚本指定的基地址 `0x80200000`，与 ELF 头的 `Entry point address` 一致；`kern_init = 0x8020000a` 正好是 `tail kern_init` 展开后的跳转目标 `j 8020000a`，符号表与反汇编互相印证；`bootstacktop - bootstack = 0x2000 = 8192` 字节，等于 `KSTACKPAGE(2) × PGSIZE(4096)`；`edata` 与 `end` 重合，说明本次构建的 `.bss` 段为空，`kern_init` 中 `memset(edata, 0, end - edata)` 的长度为 0。反汇编中 `addi sp,sp,-16 # 80202ff0 <bootstack+0x1ff0>` 进一步说明 `kern_init` 的栈帧确实落在 `bootstack` 预留区间内。
+
+三个关键地址的含义：
+
+- `0x80200000`：链接脚本指定的内核基地址，也是内核入口 `kern_entry` 的地址，即 ELF 头的 `Entry point address`；
+- `0x80201000`：启动栈 `bootstack` 的起始地址，位于 `.data` 段；
+- `0x80203000`：启动栈栈顶 `bootstacktop`，也就是 `kern_entry` 执行 `la sp, bootstacktop` 之后 `sp` 的取值。
+
+符号地址由源码和链接脚本决定，与运行环境无关：只要源码和链接脚本不变，在任何机器上编译出的 `kern_entry`、`kern_init`、`bootstack`、`bootstacktop`、`edata`、`end` 都落在同样的地址，因此本节的符号表与反汇编可以和报告其他章节在不同机器上取得的运行截图并存。
+
+![符号地址验证](images/symbols.png)
+
+### 3. QEMU 验证
 
 执行：
 
@@ -197,7 +291,7 @@ OpenSBI 正常启动，出现启动信息后，内核进入 `while (1)` 死循�
 
 ![QEMU 运行结果](images/gdb09.png)
 
-### 3. GDB 验证
+### 4. GDB 验证
 
 `make debug` 和 `make gdb` 成功建立远程调试连接。
 
@@ -205,7 +299,7 @@ OpenSBI 正常启动，出现启动信息后，内核进入 `while (1)` 死循�
 
 ![GDB 内核入口](images/gdb01.png)
 
-### 4. 启动流程验证截图
+### 5. 启动流程验证截图
 
 GDB 成功从 `pc = 0x1000` 跟踪到 `kern_entry = 0x80200000`，并验证了
 `sp = 0x80203000`。
