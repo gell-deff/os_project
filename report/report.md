@@ -212,35 +212,7 @@ KSTACKSIZE = KSTACKPAGE(2) × PGSIZE(4096) = 8192 字节
 - `PROVIDE(etext = .)`、`PROVIDE(edata = .)`、`PROVIDE(end = .)` 把段边界导出为符号供 C 代码使用，`kern_init` 中的 `memset(edata, 0, end - edata)` 就依赖它们；
 - `/DISCARD/` 丢弃 `.eh_frame` 和 `.note.GNU-stack`，这两个段在内核环境里没有用途。
 
----
-
-### Challenge：[Challenge标题]
-
-**负责人：** [学号-姓名]
-
-[按照Challenge的具体要求进行解答]
-
----
-
-## 五、测试与验证
-
-### 1. 编译验证
-
-执行：
-
-```bash
-make clean
-make
-```
-
-构建成功，生成：
-
-- `bin/kernel`：带调试信息的 ELF 内核文件；
-- `bin/ucore.img`：供 QEMU 加载的二进制内核镜像。
-
-![编译结果](images/gdb08.png)
-
-### 2. 符号地址验证
+#### 练习一的验证证据：符号地址与反汇编
 
 执行：
 
@@ -279,7 +251,35 @@ Entry point address: 0x80200000
 
 ![符号地址验证](images/symbols.png)
 
-### 3. QEMU 验证
+---
+
+### Challenge：[Challenge标题]
+
+**负责人：** [学号-姓名]
+
+[按照Challenge的具体要求进行解答]
+
+---
+
+## 五、测试与验证
+
+### 1. 编译验证
+
+执行：
+
+```bash
+make clean
+make
+```
+
+构建成功，生成：
+
+- `bin/kernel`：带调试信息的 ELF 内核文件；
+- `bin/ucore.img`：供 QEMU 加载的二进制内核镜像。
+
+![编译结果](images/gdb08.png)
+
+### 2. QEMU 验证
 
 执行：
 
@@ -291,7 +291,7 @@ OpenSBI 正常启动，出现启动信息后，内核进入 `while (1)` 死循�
 
 ![QEMU 运行结果](images/gdb09.png)
 
-### 4. GDB 验证
+### 3. GDB 验证
 
 `make debug` 和 `make gdb` 成功建立远程调试连接。
 
@@ -299,7 +299,7 @@ OpenSBI 正常启动，出现启动信息后，内核进入 `while (1)` 死循�
 
 ![GDB 内核入口](images/gdb01.png)
 
-### 5. 启动流程验证截图
+### 4. 启动流程验证截图
 
 GDB 成功从 `pc = 0x1000` 跟踪到 `kern_entry = 0x80200000`，并验证了
 `sp = 0x80203000`。
